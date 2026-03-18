@@ -1,0 +1,15 @@
+{
+  "name": "cugb-hpc-getkey",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "hpc-login": "./index.ts"
+  },
+  "scripts": {
+    "start": "bun run index.ts",
+    "login": "bun run index.ts"
+  },
+  "dependencies": {
+    "commander": "^11.1.0"
+  }
+}
