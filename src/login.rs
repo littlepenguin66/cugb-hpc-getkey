@@ -4,10 +4,12 @@ pub use crate::types::LoginConfig;
 use crate::types::{DownloadKeyResponse, LoggerOptions, TokenResponse};
 use regex_lite::Regex;
 use std::collections::HashMap;
-use ureq::Agent;
+use ureq::{Agent, AgentBuilder};
 
 const SERVICE: &str = "https://hpc.cugb.edu.cn/ac/api/auth/loginSsoRedirect.action";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8";
+const ACCEPT_LANGUAGE: &str = "zh-CN,zh;q=0.9,en;q=0.8";
 
 pub struct Logger {
     options: LoggerOptions,
@@ -41,29 +43,30 @@ pub fn login(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let logger = Logger::new(logger_options.clone());
     let mut cookies: HashMap<String, String> = HashMap::new();
-    let agent = Agent::new();
+    let agent = AgentBuilder::new().redirects(0).build();
 
-    logger.debug("→ GET login page");
+    logger.debug("Step 1: Fetching login page...");
     let login_page_url = format!(
         "https://hpc.cugb.edu.cn/sso/login?service={}&t={}",
         urlencoding::encode(&config.service),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
+        timestamp()
     );
 
-    let login_page_res = agent.get(&login_page_url).call()?;
-    update_cookies_from_response(&login_page_res, &mut cookies);
+    let login_page_res = agent
+        .get(&login_page_url)
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", ACCEPT)
+        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .call()?;
+    update_cookies(&login_page_res, &mut cookies);
+
     let login_page_html = login_page_res.into_string()?;
     let execution = extract_execution_token(&login_page_html)?;
 
-    logger.debug("→ Encrypt password");
+    logger.debug("Step 2: Encrypting password...");
     let encrypted_password = encrypt_password(&config.password);
 
-    logger.debug("→ POST credentials");
-    let login_body = build_login_body(&config.username, &encrypted_password, execution);
-
+    logger.debug("Step 3: Sending login request...");
     let login_res = agent
         .post(&login_page_url)
         .set("Cookie", &get_cookie_string(&cookies))
@@ -71,20 +74,111 @@ pub fn login(
         .set("Referer", &login_page_url)
         .set("Content-Type", "application/x-www-form-urlencoded")
         .set("User-Agent", USER_AGENT)
-        .send_string(&login_body)?;
+        .set("Accept", ACCEPT)
+        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .send_string(&build_login_body(
+            &config.username,
+            &encrypted_password,
+            execution,
+        ))?;
 
-    update_cookies_from_response(&login_res, &mut cookies);
-    handle_login_response(login_res, &agent, &mut cookies)?;
+    let status = login_res.status();
+    update_cookies(&login_res, &mut cookies);
 
-    logger.debug("→ Get JWT token");
-    let token = fetch_jwt_token(&agent, &cookies)?;
-    Ok(token)
+    match status {
+        302 => handle_ticket_redirect(&login_res, &agent, &mut cookies)?,
+        200 => handle_js_redirect(login_res, &agent, &mut cookies)?,
+        _ => return Err(format!("Login failed, status: {}", status).into()),
+    }
+
+    logger.debug("Step 4: Getting JWT token...");
+    fetch_jwt_token(&agent, &cookies)
+}
+
+fn timestamp() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+}
+
+fn handle_ticket_redirect(
+    res: &ureq::Response,
+    agent: &Agent,
+    cookies: &mut HashMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let location = match res.header("Location").and_then(|l| extract_ticket(l)) {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+
+    let sso_res = agent
+        .get(&format!("{}?ticket={}", SERVICE, location))
+        .set("Cookie", &get_cookie_string(cookies))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", ACCEPT)
+        .call()?;
+    update_cookies(&sso_res, cookies);
+
+    if sso_res.status() == 302 {
+        follow_redirect(&sso_res, agent, cookies)?;
+    }
+    Ok(())
+}
+
+fn handle_js_redirect(
+    res: ureq::Response,
+    agent: &Agent,
+    cookies: &mut HashMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let body = res.into_string()?;
+    let redirect_url = match extract_redirect_url(&body) {
+        Some(u) => u,
+        None => return Ok(()),
+    };
+
+    let redirect_res = agent
+        .get(redirect_url)
+        .set("Cookie", &get_cookie_string(cookies))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", ACCEPT)
+        .call()?;
+    update_cookies(&redirect_res, cookies);
+
+    if redirect_res.status() == 302 {
+        follow_redirect(&redirect_res, agent, cookies)?;
+    }
+    Ok(())
+}
+
+fn follow_redirect(
+    res: &ureq::Response,
+    agent: &Agent,
+    cookies: &mut HashMap<String, String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(location) = res.header("Location") {
+        let next_res = agent
+            .get(&resolve_url(location))
+            .set("Cookie", &get_cookie_string(cookies))
+            .set("User-Agent", USER_AGENT)
+            .set("Accept", ACCEPT)
+            .call()?;
+        update_cookies(&next_res, cookies);
+    }
+    Ok(())
+}
+
+fn resolve_url(url: &str) -> String {
+    if url.starts_with("http") {
+        url.to_string()
+    } else {
+        format!("https://hpc.cugb.edu.cn{}", url)
+    }
 }
 
 fn extract_execution_token(html: &str) -> Result<&str, &'static str> {
-    let execution_re = Regex::new(r#"name="execution"\s+value="([^"]+)""#).unwrap();
-    execution_re
-        .captures(html)
+    let re = Regex::new(r#"name="execution"\s+value="([^"]+)""#).unwrap();
+    re.captures(html)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str())
         .ok_or("Failed to get execution token")
@@ -92,57 +186,12 @@ fn extract_execution_token(html: &str) -> Result<&str, &'static str> {
 
 fn build_login_body(username: &str, password: &str, execution: &str) -> String {
     format!(
-        "username={}&password={}&encrypted={}&mode={}&captcha={}&execution={}&_eventId={}&geolocation={}&submit={}",
+        "username={}&password={}&encrypted=true&mode=0&captcha=&execution={}&_eventId=submit&geolocation=&submit={}",
         urlencoding::encode(username),
         urlencoding::encode(password),
-        urlencoding::encode("true"),
-        urlencoding::encode("0"),
-        urlencoding::encode(""),
         urlencoding::encode(execution),
-        urlencoding::encode("submit"),
-        urlencoding::encode(""),
         urlencoding::encode("登录")
     )
-}
-
-fn handle_login_response(
-    login_res: ureq::Response,
-    agent: &Agent,
-    cookies: &mut HashMap<String, String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if login_res.status() == 302 {
-        if let Some(location) = login_res.header("Location") {
-            if let Some(ticket) = extract_ticket(location) {
-                let sso_res = agent
-                    .get(&format!("{}?ticket={}", SERVICE, ticket))
-                    .set("Cookie", &get_cookie_string(cookies))
-                    .call()?;
-                update_cookies_from_response(&sso_res, cookies);
-            }
-        }
-    } else if login_res.status() == 200 {
-        let login_body = login_res.into_string()?;
-        if let Some(redirect_url) = extract_redirect_url(&login_body) {
-            let redirect_res = agent
-                .get(redirect_url)
-                .set("Cookie", &get_cookie_string(cookies))
-                .call()?;
-            update_cookies_from_response(&redirect_res, cookies);
-
-            if redirect_res.status() == 302 {
-                if let Some(next_location) = redirect_res.header("Location") {
-                    let next_res = agent
-                        .get(next_location)
-                        .set("Cookie", &get_cookie_string(cookies))
-                        .call()?;
-                    update_cookies_from_response(&next_res, cookies);
-                }
-            }
-        }
-    } else {
-        return Err(format!("Login failed, status code: {}", login_res.status()).into());
-    }
-    Ok(())
 }
 
 fn extract_ticket(location: &str) -> Option<&str> {
@@ -155,18 +204,16 @@ fn extract_ticket(location: &str) -> Option<&str> {
 }
 
 fn extract_redirect_url(html: &str) -> Option<&str> {
-    let redirect_re = Regex::new(r#"window\.location\.href\s*=\s*['"]([^'"]+)['"]"#).unwrap();
-    redirect_re
-        .captures(html)
+    let re = Regex::new(r#"window\.location\.href\s*=\s*['"]([^'"]+)['"]"#).unwrap();
+    re.captures(html)
         .and_then(|caps| caps.get(1).map(|m| m.as_str()))
 }
 
-fn update_cookies_from_response(res: &ureq::Response, cookies: &mut HashMap<String, String>) {
+fn update_cookies(res: &ureq::Response, cookies: &mut HashMap<String, String>) {
     for cookie in res.all("set-cookie") {
-        if let Some(eq) = cookie.split(';').next().and_then(|s| s.find('=')) {
-            let key = cookie[..eq].to_string();
-            let value = cookie[eq + 1..].to_string();
-            cookies.insert(key, value);
+        let pair = cookie.split(';').next().unwrap_or("");
+        if let Some(pos) = pair.find('=') {
+            cookies.insert(pair[..pos].to_string(), pair[pos + 1..].to_string());
         }
     }
 }
@@ -175,20 +222,20 @@ fn fetch_jwt_token(
     agent: &Agent,
     cookies: &HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let token_url = "https://hpc.cugb.edu.cn/ac/api/user/getCurrentUserInfo.action?includeToken=true&refresh=true";
-    let token_res = agent
-        .get(token_url)
+    let res = agent
+        .get("https://hpc.cugb.edu.cn/ac/api/user/getCurrentUserInfo.action?includeToken=true&refresh=true")
         .set("Cookie", &get_cookie_string(cookies))
+        .set("User-Agent", USER_AGENT)
+        .set("Accept", "application/json")
         .call()?;
 
-    let token_text = token_res.into_string()?;
-    let token_data: TokenResponse = serde_json::from_str(&token_text)?;
+    let data: TokenResponse = serde_json::from_str(&res.into_string()?)?;
 
-    if token_data.code != "0" || token_data.data.token_list.is_empty() {
+    if data.code != "0" || data.data.token_list.is_empty() {
         return Err("Failed to get token".into());
     }
 
-    Ok(token_data.data.token_list[0].token.clone())
+    Ok(data.data.token_list[0].token.clone())
 }
 
 pub fn download_key(
@@ -197,30 +244,29 @@ pub fn download_key(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let logger = Logger::new(logger_options.clone());
 
-    logger.debug("→ Download key");
-    let api_url = "https://gridview.cugb.edu.cn:6081/sothisai/api/eshell/action/downloadkey";
-    let api_res = ureq::get(api_url)
+    logger.debug("Step 5: Downloading private key...");
+    let res = ureq::get("https://gridview.cugb.edu.cn:6081/sothisai/api/eshell/action/downloadkey")
         .set("token", jwt_token)
         .set("Accept", "application/json")
         .call()?;
 
-    let api_data: DownloadKeyResponse = api_res.into_json()?;
+    let data: DownloadKeyResponse = res.into_json()?;
 
-    if api_data.code == "0" && api_data.data.is_some() {
-        let key_path = format!("{}/.hpckey", dirs::home_dir().unwrap().display());
-        std::fs::write(&key_path, api_data.data.as_ref().unwrap())?;
+    if data.code == "0" && data.data.is_some() {
+        let path = format!("{}/.hpckey", dirs::home_dir().unwrap().display());
+        std::fs::write(&path, data.data.as_ref().unwrap())?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).ok();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
         }
 
-        logger.info(&format!("Private key saved to: {}", key_path));
+        logger.info(&format!("Private key saved to: {}", path));
     } else {
         log_error(&format!(
             "Failed to get private key: {}",
-            api_data.msg.unwrap_or_default()
+            data.msg.unwrap_or_default()
         ));
     }
 

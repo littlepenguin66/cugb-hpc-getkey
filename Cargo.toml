@@ -1,6 +1,6 @@
 [package]
 name = "ghpc"
-version = "2026.03.18"
+version = "2026.3.18"
 edition = "2024"
 description = "CUGB HPC auto-login tool - authenticates and downloads HPC private key"
 authors = ["littlepenguin66"]

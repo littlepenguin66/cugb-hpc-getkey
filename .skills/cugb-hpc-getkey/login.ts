@@ -1,58 +1,68 @@
-import { LoginConfig, LoggerOptions } from "./types";
-import { encryptPassword } from "./crypto";
-import { parseCookies, getCookieString } from "./session";
+import type { LoginConfig, LoggerOptions } from "./types.ts";
+import { encryptPassword } from "./crypto.ts";
+import { parseCookies, getCookieString } from "./session.ts";
 
 const SERVICE = "https://hpc.cugb.edu.cn/ac/api/auth/loginSsoRedirect.action";
+
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+};
 
 class Logger {
   constructor(private options: LoggerOptions) {}
 
   info(message: string): void {
-    if (!this.options.quiet) {
-      console.log(message);
-    }
+    if (!this.options.quiet) console.log(message);
   }
 
   verbose(message: string): void {
-    if (this.options.verbose) {
-      console.log(message);
-    }
+    if (this.options.verbose) console.log(message);
   }
 
   error(message: string): void {
     console.error(message);
   }
-
-  token(token: string): void {
-    console.log(token);
-  }
 }
 
-export async function login(
-  config: LoginConfig,
-  loggerOptions: LoggerOptions,
-): Promise<string> {
+function resolveUrl(url: string): string {
+  return url.startsWith("http") ? url : `https://hpc.cugb.edu.cn${url}`;
+}
+
+function headersWithCookies(cookies: Map<string, string>): Record<string, string> {
+  return { ...HEADERS, Cookie: getCookieString(cookies) };
+}
+
+async function followRedirect(
+  location: string | null,
+  cookies: Map<string, string>,
+): Promise<void> {
+  if (!location) return;
+  const res = await fetch(resolveUrl(location), {
+    headers: headersWithCookies(cookies),
+    redirect: "manual",
+  });
+  parseCookies(res.headers.getSetCookie(), cookies);
+}
+
+export async function login(config: LoginConfig, loggerOptions: LoggerOptions): Promise<string> {
   const logger = new Logger(loggerOptions);
   const cookies = new Map<string, string>();
 
   const loginPageUrl = `https://hpc.cugb.edu.cn/sso/login?service=${encodeURIComponent(SERVICE)}&t=${Date.now()}`;
 
   logger.verbose("Step 1: Fetching login page...");
-  const loginPageRes = await fetch(loginPageUrl);
+  const loginPageRes = await fetch(loginPageUrl, { headers: HEADERS });
   parseCookies(loginPageRes.headers.getSetCookie(), cookies);
 
   const loginPageHtml = await loginPageRes.text();
-
-  const executionMatch = loginPageHtml.match(
-    /name="execution"\s+value="([^"]+)"/,
-  );
-  if (!executionMatch) {
-    throw new Error("Failed to get execution token");
-  }
+  const executionMatch = loginPageHtml.match(/name="execution"\s+value="([^"]+)"/);
+  if (!executionMatch) throw new Error("Failed to get execution token");
   const execution = executionMatch[1];
 
   logger.verbose("Step 2: Encrypting password...");
-  const encryptedPassword = encryptPassword(config.password);
+  const encryptedPassword = await encryptPassword(config.password);
 
   logger.verbose("Step 3: Sending login request...");
   const loginBody = new URLSearchParams({
@@ -61,7 +71,7 @@ export async function login(
     encrypted: "true",
     mode: "0",
     captcha: "",
-    execution: execution,
+    execution,
     _eventId: "submit",
     geolocation: "",
     submit: "Login",
@@ -70,6 +80,7 @@ export async function login(
   const loginRes = await fetch(loginPageUrl, {
     method: "POST",
     headers: {
+      ...HEADERS,
       "Content-Type": "application/x-www-form-urlencoded",
       Cookie: getCookieString(cookies),
       Origin: "https://hpc.cugb.edu.cn",
@@ -83,39 +94,28 @@ export async function login(
 
   if (loginRes.status === 302) {
     const location = loginRes.headers.get("Location");
-    if (location) {
-      const ticketMatch = location.match(/ticket=([^&]+)/);
-      if (ticketMatch) {
-        const ticket = ticketMatch[1];
-        const ssoRes = await fetch(`${SERVICE}?ticket=${ticket}`, {
-          headers: { Cookie: getCookieString(cookies) },
-          redirect: "manual",
-        });
-        parseCookies(ssoRes.headers.getSetCookie(), cookies);
+    const ticketMatch = location?.match(/ticket=([^&]+)/);
+    if (ticketMatch) {
+      const ssoRes = await fetch(`${SERVICE}?ticket=${ticketMatch[1]}`, {
+        headers: headersWithCookies(cookies),
+        redirect: "manual",
+      });
+      parseCookies(ssoRes.headers.getSetCookie(), cookies);
+      if (ssoRes.status === 302) {
+        await followRedirect(ssoRes.headers.get("Location"), cookies);
       }
     }
   } else if (loginRes.status === 200) {
-    const loginResponseBody = await loginRes.text();
-    const redirectMatch = loginResponseBody.match(
-      /window\.location\.href\s*=\s*['"]([^'"]+)['"]/,
-    );
+    const body = await loginRes.text();
+    const redirectMatch = body.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
     if (redirectMatch) {
-      const redirectUrl = redirectMatch[1];
-      const redirectRes = await fetch(redirectUrl, {
-        headers: { Cookie: getCookieString(cookies) },
+      const redirectRes = await fetch(redirectMatch[1], {
+        headers: headersWithCookies(cookies),
         redirect: "manual",
       });
       parseCookies(redirectRes.headers.getSetCookie(), cookies);
-
       if (redirectRes.status === 302) {
-        const nextLocation = redirectRes.headers.get("Location");
-        if (nextLocation) {
-          const nextRes = await fetch(nextLocation, {
-            headers: { Cookie: getCookieString(cookies) },
-            redirect: "manual",
-          });
-          parseCookies(nextRes.headers.getSetCookie(), cookies);
-        }
+        await followRedirect(redirectRes.headers.get("Location"), cookies);
       }
     }
   } else {
@@ -123,20 +123,14 @@ export async function login(
   }
 
   logger.verbose("Step 4: Getting JWT token...");
-  const tokenUrl =
-    "https://hpc.cugb.edu.cn/ac/api/user/getCurrentUserInfo.action?includeToken=true&refresh=true";
-  const tokenRes = await fetch(tokenUrl, {
-    headers: { Cookie: getCookieString(cookies) },
-  });
+  const tokenRes = await fetch(
+    "https://hpc.cugb.edu.cn/ac/api/user/getCurrentUserInfo.action?includeToken=true&refresh=true",
+    { headers: headersWithCookies(cookies) }
+  );
 
-  const tokenText = await tokenRes.text();
+  if (tokenRes.status !== 200) throw new Error("Failed to get token");
 
-  if (tokenRes.status !== 200) {
-    throw new Error("Failed to get token");
-  }
-
-  const tokenData = JSON.parse(tokenText);
-
+  const tokenData = await tokenRes.json() as { code: string; data?: { tokenList?: { token: string }[] } };
   if (tokenData.code !== "0" || !tokenData.data?.tokenList?.length) {
     throw new Error("Failed to get token");
   }
@@ -144,37 +138,23 @@ export async function login(
   return tokenData.data.tokenList[0].token;
 }
 
-export async function downloadKey(
-  jwtToken: string,
-  loggerOptions: LoggerOptions,
-): Promise<void> {
+export async function downloadKey(jwtToken: string, loggerOptions: LoggerOptions): Promise<void> {
   const logger = new Logger(loggerOptions);
 
   logger.verbose("Step 5: Downloading private key...");
-  const apiUrl =
-    "https://gridview.cugb.edu.cn:6081/sothisai/api/eshell/action/downloadkey";
-  const apiRes = await fetch(apiUrl, {
-    headers: {
-      token: jwtToken,
-      Accept: "application/json",
-    },
+  const res = await fetch("https://gridview.cugb.edu.cn:6081/sothisai/api/eshell/action/downloadkey", {
+    headers: { token: jwtToken, Accept: "application/json" },
   });
 
-  const apiData = (await apiRes.json()) as {
-    code: string;
-    data?: string;
-    msg?: string;
-  };
+  const data = (await res.json()) as { code: string; data?: string; msg?: string };
 
-  if (apiData.code === "0" && apiData.data) {
+  if (data.code === "0" && data.data) {
     const keyPath = `${process.env.HOME}/.hpckey`;
-    await Bun.write(keyPath, apiData.data);
-
+    await Bun.write(keyPath, data.data);
     const { chmodSync } = await import("fs");
     chmodSync(keyPath, 0o600);
-
     logger.info(`Private key saved to: ${keyPath}`);
   } else {
-    logger.error(`Failed to get private key: ${apiData.msg}`);
+    logger.error(`Failed to get private key: ${data.msg}`);
   }
 }

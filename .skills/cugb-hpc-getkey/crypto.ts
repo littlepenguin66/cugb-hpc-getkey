@@ -1,14 +1,38 @@
 import crypto from 'crypto';
 
-const RSA_PUBLIC_KEY = 'MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBALaXEnbjI6fjy+t9W9AiO/KS0q+b/OZFS+7ykinLbiriUx9P8BcuuHnVbXNiZp5jW70eVGBtX4DhGUPzJa1YT/8CAwEAAQ==';
+const LOGIN_JS_URL = 'https://hpc.cugb.edu.cn/sso/themes/sso/js/login-744fe89e6ff1efcab5fff7e1668641b0.js';
+const DEFAULT_PUBLIC_KEY = 'MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBALaXEnbjI6fjy+t9W9AiO/KS0q+b/OZFS+7ykinLbiriUx9P8BcuuHnVbXNiZp5jW70eVGBtX4DhGUPzJa1YT/8CAwEAAQ==';
+
+let cachedPublicKey: string | null = null;
 
 function base64ToPem(base64Key: string): string {
   const lines = base64Key.match(/.{1,64}/g) || [];
   return `-----BEGIN PUBLIC KEY-----\n${lines.join('\n')}\n-----END PUBLIC KEY-----`;
 }
 
-export function encryptPassword(password: string): string {
-  const publicKey = base64ToPem(RSA_PUBLIC_KEY);
+async function fetchPublicKey(): Promise<string> {
+  if (cachedPublicKey) {
+    return cachedPublicKey;
+  }
+
+  try {
+    const res = await fetch(LOGIN_JS_URL);
+    const body = await res.text();
+    const match = body.match(/var key = '([^']+)'/);
+    if (match) {
+      cachedPublicKey = match[1];
+      return match[1];
+    }
+  } catch (e) {
+    console.error('Warning: Failed to fetch public key, using fallback');
+  }
+
+  return DEFAULT_PUBLIC_KEY;
+}
+
+export async function encryptPassword(password: string): Promise<string> {
+  const publicKeyBase64 = await fetchPublicKey();
+  const publicKey = base64ToPem(publicKeyBase64);
   const buffer = Buffer.from(password, 'utf-8');
   const encrypted = crypto.publicEncrypt(
     {
