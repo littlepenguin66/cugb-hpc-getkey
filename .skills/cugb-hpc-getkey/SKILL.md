@@ -22,9 +22,8 @@ Use this skill when the user:
 ### Run Login Tool
 
 ```bash
-
-# Must In skill folder
-# Using environment variables (recommended)
+cd .skills/cugb-hpc-getkey
+bun install
 export HPC_USERNAME=your_username
 export HPC_PASSWORD=your_password
 bun run index.ts
@@ -39,8 +38,8 @@ bun run index.ts -u <username> -p <password>
 |--------|-------|-------------|
 | `--username` | `-u` | Username |
 | `--password` | `-p` | Password |
-| `--quiet` | `-q` | Quiet mode, output only token |
-| `--verbose` | `-v` | Verbose logging |
+| `--quiet` | `-q` | Suppress info output and print only token |
+| `--verbose` | `-v` | Enable verbose logging and print token |
 | `--force` | `-f` | Force refresh, ignore cache |
 | `--status` | `-s` | Check cache status |
 
@@ -52,9 +51,9 @@ bun run index.ts --status
 
 Example output:
 ```
-Cache Status: Valid
+Cache status: Valid
 Username: username
-Expires: 2026/3/18 21:34:18
+Expires at: 2026/3/18 21:34:18
 ```
 
 ### Force Refresh Token
@@ -65,10 +64,10 @@ bun run index.ts --force
 bun run index.ts -u <username> -p <password> -f
 ```
 
-## Project Structure
+## Skill Structure
 
 ```
-cugb-hpc-getkey/
+.skills/cugb-hpc-getkey/
 ├── index.ts      # Entry point
 ├── cli.ts        # CLI argument parsing
 ├── login.ts      # Login flow
@@ -87,6 +86,8 @@ cugb-hpc-getkey/
 4. **Follow Redirect** - Handle CAS ticket exchange for session
 5. **Get JWT** - Call API to get token
 6. **Download Private Key** - Use JWT to download SSH private key to `~/.hpckey`
+
+If cached token download fails, the tool falls back to a fresh login automatically.
 
 ## Troubleshooting
 
@@ -107,6 +108,7 @@ bun run index.ts -v  # verbose mode
 
 - Cache validity: 2 hours
 - Auto re-login after expiration
+- Cached token download failure triggers re-login
 - Use `--force` to force refresh
 
 ## File Locations
@@ -115,3 +117,9 @@ bun run index.ts -v  # verbose mode
 |------|----------|
 | Token Cache | `~/.hpc-login-cache.json` |
 | SSH Private Key | `~/.hpckey` (permission 0600) |
+
+## Security Notes
+
+- Prefer `HPC_USERNAME` and `HPC_PASSWORD` environment variables over `-p` on the command line
+- Successful default runs save the private key locally and do not print the token
+- Use `--quiet` only when you explicitly need the token in stdout

@@ -19,27 +19,41 @@ async function fetchPublicKey(): Promise<string> {
     const res = await fetch(LOGIN_JS_URL);
     const body = await res.text();
     const match = body.match(/var key = '([^']+)'/);
-    if (match) {
-      cachedPublicKey = match[1];
-      return match[1];
+    if (!match) {
+      throw new Error('Failed to extract public key from login.js');
     }
-  } catch (e) {
-    console.error('Warning: Failed to fetch public key, using fallback');
+
+    cachedPublicKey = match[1];
+    return match[1];
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: Failed to fetch public key: ${message}. Using fallback public key`);
   }
 
   return DEFAULT_PUBLIC_KEY;
 }
 
-export async function encryptPassword(password: string): Promise<string> {
-  const publicKeyBase64 = await fetchPublicKey();
+function encryptPasswordWithPublicKey(password: string, publicKeyBase64: string): string {
   const publicKey = base64ToPem(publicKeyBase64);
   const buffer = Buffer.from(password, 'utf-8');
-  const encrypted = crypto.publicEncrypt(
-    {
-      key: publicKey,
-      padding: crypto.constants.RSA_PKCS1_PADDING,
-    },
-    buffer
-  );
-  return encrypted.toString('base64');
+
+  try {
+    const encrypted = crypto.publicEncrypt(
+      {
+        key: publicKey,
+        padding: crypto.constants.RSA_PKCS1_PADDING,
+      },
+      buffer
+    );
+
+    return encrypted.toString('base64');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to encrypt password: ${message}`);
+  }
+}
+
+export async function encryptPassword(password: string): Promise<string> {
+  const publicKeyBase64 = await fetchPublicKey();
+  return encryptPasswordWithPublicKey(password, publicKeyBase64);
 }

@@ -9,8 +9,23 @@ use cache::{get_cache_status, read_cache, write_cache};
 use chrono::TimeZone;
 use clap::Parser;
 use cli::Cli;
-use login::{download_key, login, LoginConfig};
+use login::{LoginConfig, download_key, login};
+use std::error::Error;
 use std::io::{self, Write};
+
+type DynError = Box<dyn Error>;
+
+#[derive(Debug, PartialEq, Eq)]
+struct DownloadFlowResult {
+    token: String,
+    source: TokenSource,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum TokenSource {
+    Cache,
+    Login,
+}
 
 fn prompt_credentials() -> (String, String) {
     print!("Username: ");
@@ -32,6 +47,38 @@ fn format_expires_at(timestamp_millis: i64) -> String {
         .unwrap()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string()
+}
+
+fn execute_download_flow<Download, LoginFn, CacheWriter>(
+    force: bool,
+    cached_token: Option<String>,
+    mut download: Download,
+    mut login_fn: LoginFn,
+    mut cache_writer: CacheWriter,
+) -> Result<DownloadFlowResult, DynError>
+where
+    Download: FnMut(&str) -> Result<(), DynError>,
+    LoginFn: FnMut() -> Result<String, DynError>,
+    CacheWriter: FnMut(&str) -> Result<(), DynError>,
+{
+    if !force
+        && let Some(token) = cached_token
+        && download(&token).is_ok()
+    {
+        return Ok(DownloadFlowResult {
+            token,
+            source: TokenSource::Cache,
+        });
+    }
+
+    let token = login_fn()?;
+    download(&token)?;
+    cache_writer(&token)?;
+
+    Ok(DownloadFlowResult {
+        token,
+        source: TokenSource::Login,
+    })
 }
 
 fn main() {
@@ -59,29 +106,23 @@ fn main() {
 
     let logger_options = cli.get_logger_options();
 
-    if !cli.force {
-        if let Some(cached_token) = read_cache(&config.username) {
+    match execute_download_flow(
+        cli.force,
+        read_cache(&config.username),
+        |token| download_key(token, &logger_options),
+        || login(&config, &logger_options),
+        |token| write_cache(&config.username, token, 2 * 60 * 60 * 1000).map_err(Into::into),
+    ) {
+        Ok(result) => {
             if cli.verbose {
-                eprintln!("✓ Using cached token");
-            }
-            let _ = download_key(&cached_token, &logger_options);
-            if cli.verbose {
-                println!("Token: {}", cached_token);
-            }
-            return;
-        }
-    }
-
-    match login(&config, &logger_options) {
-        Ok(token) => {
-            let _ = write_cache(&config.username, &token, 2 * 60 * 60 * 1000);
-            let _ = download_key(&token, &logger_options);
-            if cli.verbose {
-                println!("Token: {}", token);
+                if result.source == TokenSource::Cache {
+                    eprintln!("✓ Using cached token");
+                }
+                println!("Token: {}", result.token);
             }
         }
         Err(e) => {
-            eprintln!("Login failed: {}", e);
+            eprintln!("Operation failed: {}", e);
             std::process::exit(1);
         }
     }

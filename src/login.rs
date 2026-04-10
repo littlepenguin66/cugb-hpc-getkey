@@ -4,6 +4,7 @@ pub use crate::types::LoginConfig;
 use crate::types::{DownloadKeyResponse, LoggerOptions, TokenResponse};
 use regex_lite::Regex;
 use std::collections::HashMap;
+use std::error::Error;
 use ureq::{Agent, AgentBuilder};
 
 const SERVICE: &str = "https://hpc.cugb.edu.cn/ac/api/auth/loginSsoRedirect.action";
@@ -33,14 +34,10 @@ impl Logger {
     }
 }
 
-fn log_error(message: &str) {
-    eprintln!("{}", message);
-}
-
 pub fn login(
     config: &LoginConfig,
     logger_options: &LoggerOptions,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> Result<String, Box<dyn Error>> {
     let logger = Logger::new(logger_options.clone());
     let mut cookies: HashMap<String, String> = HashMap::new();
     let agent = AgentBuilder::new().redirects(0).build();
@@ -64,7 +61,7 @@ pub fn login(
     let execution = extract_execution_token(&login_page_html)?;
 
     logger.debug("Step 2: Encrypting password...");
-    let encrypted_password = encrypt_password(&config.password);
+    let encrypted_password = encrypt_password(&config.password)?;
 
     logger.debug("Step 3: Sending login request...");
     let login_res = agent
@@ -238,10 +235,17 @@ fn fetch_jwt_token(
     Ok(data.data.token_list[0].token.clone())
 }
 
-pub fn download_key(
-    jwt_token: &str,
-    logger_options: &LoggerOptions,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn extract_private_key(response: DownloadKeyResponse) -> Result<String, Box<dyn Error>> {
+    match (response.code.as_str(), response.data, response.msg) {
+        ("0", Some(private_key), _) => Ok(private_key),
+        (_, _, Some(message)) if !message.is_empty() => {
+            Err(format!("Failed to get private key: {}", message).into())
+        }
+        _ => Err("Failed to get private key".into()),
+    }
+}
+
+pub fn download_key(jwt_token: &str, logger_options: &LoggerOptions) -> Result<(), Box<dyn Error>> {
     let logger = Logger::new(logger_options.clone());
 
     logger.debug("Step 5: Downloading private key...");
@@ -250,25 +254,19 @@ pub fn download_key(
         .set("Accept", "application/json")
         .call()?;
 
-    let data: DownloadKeyResponse = res.into_json()?;
+    let private_key = extract_private_key(res.into_json()?)?;
+    let path = dirs::home_dir()
+        .ok_or("Failed to determine home directory")?
+        .join(".hpckey");
+    std::fs::write(&path, private_key)?;
 
-    if data.code == "0" && data.data.is_some() {
-        let path = format!("{}/.hpckey", dirs::home_dir().unwrap().display());
-        std::fs::write(&path, data.data.as_ref().unwrap())?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
-        }
-
-        logger.info(&format!("Private key saved to: {}", path));
-    } else {
-        log_error(&format!(
-            "Failed to get private key: {}",
-            data.msg.unwrap_or_default()
-        ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     }
+
+    logger.info(&format!("Private key saved to: {}", path.display()));
 
     Ok(())
 }

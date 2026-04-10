@@ -11,6 +11,15 @@ export interface TokenCache {
   createdAt: number;
 }
 
+export interface TokenCacheFile {
+  username: string;
+  token: string;
+  expiresAt?: number;
+  createdAt?: number;
+  expires_at?: number;
+  created_at?: number;
+}
+
 export interface SessionData {
   cookies: Map<string, string>;
   execution: string;

@@ -1,22 +1,36 @@
 # ghpc
 
-CUGB HPC auto-login tool - authenticates and downloads your HPC private key.
+[中文](README_ZH.md)
+
+`ghpc` is a small rust cli for cugb hpc login automation. it logs in through cas sso, reuses a short-lived local token cache when possible, and downloads your ssh private key to `~/.hpckey`.
+
+if you use the cugb hpc platform regularly, this tool exists for one reason: to turn an annoying browser workflow into one command.
 
 ## Why I Made This
 
-The school's HPC platform sucks. The web UI is laggy and awful to use. The eshell in browser is so slow it's barely usable.
+the school hpc platform is usable, but not pleasant.
 
-They let you download an SSH key, but for security reasons it only lasts 12 hours. After that, you have to:
+- the web ui is slow
+- the browser eshell is not something i want to rely on
+- the ssh key expires quickly
+- the refresh flow is repetitive and easy to get tired of
 
-1. Log in to the web portal
-2. Wait for the laggy page to load
-3. Head to the eshell page
-4. Find the download button
-5. Download the key (with some messy-ass name) to your Downloads folder
+every time the key expires, the usual path is:
 
-And you have to do this every 12 hours. Annoying as hell.
+1. open the portal
+2. wait for the page to catch up
+3. jump through the hpc pages
+4. find the download action again
+5. save the key locally
 
-So I made this tiny tool to make my life easier. Now I just run `ghpc` and done. It handles the login, caches your token, and grabs the key - all automatically.
+that is not hard, just annoying enough to deserve automation.
+
+so this project keeps the workflow simple:
+
+- log in
+- reuse cache when valid
+- refresh automatically when cache no longer works
+- write the key to `~/.hpckey`
 
 ## Installation
 
@@ -26,63 +40,111 @@ cd cugb-hpc-getkey
 cargo build --release
 ```
 
-The binary will be at `target/release/ghpc`.
+the binary will be built at:
 
-For convenience, move it to your local bin:
+```bash
+target/release/ghpc
+```
+
+if you want it available globally:
 
 ```bash
 mv target/release/ghpc ~/.local/bin/
 ```
 
-Then you can run `ghpc` from anywhere.
+## Quick Start
 
-## Usage
+interactive use:
 
 ```bash
-# Interactive prompt (will ask for username/password)
-./target/release/ghpc
-
-# With credentials
-./target/release/ghpc -u <username> -p <password>
-
-# Force re-login (ignore cached token)
-./target/release/ghpc --force
-
-# Check cache status
-./target/release/ghpc --status
+ghpc
 ```
 
-### Options
+with environment variables:
+
+```bash
+export HPC_USERNAME=your_username
+export HPC_PASSWORD=your_password
+ghpc
+```
+
+force a fresh login:
+
+```bash
+ghpc --force
+```
+
+check cache status:
+
+```bash
+ghpc --status
+```
+
+debug a failing run:
+
+```bash
+ghpc --force --verbose
+```
+
+## Options
 
 | Flag | Description |
 |------|-------------|
-| `-u, --username` | HPC username (or set `HPC_USERNAME` env var) |
-| `-p, --password` | HPC password (or set `HPC_PASSWORD` env var) |
-| `-f, --force` | Force re-login, ignore cached token |
-| `-s, --status` | Show cache status |
-| `-q, --quiet` | Suppress info output |
-| `-v, --verbose` | Enable debug output |
+| `-u, --username` | HPC username, or use `HPC_USERNAME` |
+| `-p, --password` | HPC password, or use `HPC_PASSWORD` |
+| `-f, --force` | Skip cache and perform a fresh login |
+| `-s, --status` | Print cache status only |
+| `-q, --quiet` | Suppress informational output |
+| `-v, --verbose` | Print debug logs and token output |
 
-## How It Works
+## What It Does
 
-1. Authenticates to CUGB HPC via CAS SSO
-2. Caches JWT token for 2 hours (`~/.hpc-login-cache.json`)
-3. Downloads private key to `~/.hpckey`
+1. requests the cugb hpc cas login page
+2. extracts the `execution` token
+3. encrypts your password with the upstream rsa public key
+4. completes the sso redirect flow manually
+5. requests a jwt token from the hpc api
+6. downloads the ssh private key from gridview
+7. writes the key to `~/.hpckey`
+8. stores a short-lived cache in `~/.hpc-login-cache.json`
 
-Subsequent runs use the cached token until it expires.
+if cached token download fails, `ghpc` falls back to a fresh login automatically.
+
+## Documentation
+
+core docs:
+
+- [architecture](docs/architecture.md)
+- [cli](docs/cli.md)
+- [security](docs/security.md)
+- [troubleshooting](docs/troubleshooting.md)
+
+release notes:
+
+- [v2026.3.18](docs/release/v2026.3.18.md)
+- [v2026.4.11](docs/release/v2026.4.11.md)
 
 ## Use with AI
 
-In the AI age, you can directly ask AI to help with HPC tasks. This project includes a skill file (`.skills/cugb-hpc-getkey/`) that helps AI assistants understand how to work with the HPC system.
+this repo also ships an ai-oriented skill package in:
 
-**Security Warning**: Never share your HPC credentials (username/password) with AI assistants unless you fully trust them. This tool runs locally and keeps your credentials secure on your machine.
+```text
+.skills/cugb-hpc-getkey/
+```
+
+it helps coding assistants understand the login flow and local file layout.
+
+security note:
+
+- do not casually give your real hpc password or private key to an ai system
+- prefer running the tool locally and only asking ai for help with setup or debugging
 
 ## Notes
 
-The school's RSA public key may change over time. If login fails, try updating to the latest version of this tool.
-
-If you encounter any issues, feel free to open an issue on GitHub.
+- the upstream rsa public key may change over time
+- if login suddenly breaks, check `docs/troubleshooting.md`
+- if you care about safe credential handling, read `docs/security.md`
 
 ## License
 
-See [LICENSE](LICENSE).
+see [LICENSE](LICENSE).

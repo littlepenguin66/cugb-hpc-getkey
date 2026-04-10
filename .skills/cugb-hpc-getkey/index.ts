@@ -4,8 +4,39 @@ import {
   getLoginConfig,
   getLoggerOptions,
 } from "./cli";
-import { readCache, writeCache, getCacheStatus, clearCache } from "./cache";
+import { readCache, writeCache, getCacheStatus } from "./cache";
 import { login, downloadKey } from "./login";
+
+type DownloadFlowResult = {
+  token: string;
+  source: "cache" | "login";
+};
+
+async function executeDownloadFlow(
+  force: boolean,
+  username: string,
+  loggerOptions: ReturnType<typeof getLoggerOptions>,
+  loginConfig: NonNullable<ReturnType<typeof getLoginConfig>>,
+): Promise<DownloadFlowResult> {
+  if (!force) {
+    const cachedToken = await readCache(username);
+    if (cachedToken) {
+      try {
+        await downloadKey(cachedToken, loggerOptions);
+        return { token: cachedToken, source: "cache" };
+      } catch {}
+    }
+  }
+
+  const token = await login(loginConfig, loggerOptions);
+  await downloadKey(token, loggerOptions);
+  await writeCache(username, token);
+  return { token, source: "login" };
+}
+
+function printError(prefix: string, error: unknown): void {
+  console.error(prefix, error instanceof Error ? error.message : error);
+}
 
 async function main() {
   const program = createCommand();
@@ -40,30 +71,32 @@ async function main() {
     process.exit(1);
   }
 
-  if (!options.force) {
-    const cachedToken = await readCache(config.username);
-    if (cachedToken) {
-      if (!options.quiet) {
-        console.log("Using cached token");
-      }
-      await downloadKey(cachedToken, loggerOptions);
-      console.log(cachedToken);
+  try {
+    const result = await executeDownloadFlow(
+      options.force,
+      config.username,
+      loggerOptions,
+      config,
+    );
+
+    if (options.quiet) {
+      console.log(result.token);
       return;
     }
-  }
 
-  try {
-    const token = await login(config, loggerOptions);
-    await writeCache(config.username, token);
-    await downloadKey(token, loggerOptions);
-    console.log(token);
+    if (options.verbose) {
+      if (result.source === "cache") {
+        console.error("Using cached token");
+      }
+      console.log(result.token);
+    }
   } catch (error) {
-    console.error(
-      "Login failed:",
-      error instanceof Error ? error.message : error,
-    );
+    printError("Operation failed:", error);
     process.exit(1);
   }
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  printError("Operation failed:", error);
+  process.exit(1);
+});

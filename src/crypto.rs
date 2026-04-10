@@ -1,6 +1,7 @@
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use regex_lite::Regex;
-use rsa::{pkcs8::DecodePublicKey, Pkcs1v15Encrypt, RsaPublicKey};
+use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey};
+use std::error::Error;
 
 const LOGIN_JS_URL: &str =
     "https://hpc.cugb.edu.cn/sso/themes/sso/js/login-744fe89e6ff1efcab5fff7e1668641b0.js";
@@ -30,22 +31,29 @@ fn fetch_public_key() -> Result<String, Box<dyn std::error::Error>> {
     }
 }
 
-pub fn encrypt_password(password: &str) -> String {
-    let public_key_base64 = fetch_public_key().unwrap_or_else(|_| {
-        eprintln!("Warning: Using fallback public key");
-        DEFAULT_PUBLIC_KEY.to_string()
-    });
+fn encrypt_password_with_public_key(
+    password: &str,
+    public_key_base64: &str,
+) -> Result<String, Box<dyn Error>> {
+    let pem = base64_to_pem(public_key_base64);
+    let public_key = RsaPublicKey::from_public_key_pem(&pem)?;
+    let encrypted = public_key.encrypt(
+        &mut rand::thread_rng(),
+        Pkcs1v15Encrypt,
+        password.as_bytes(),
+    )?;
 
-    let pem = base64_to_pem(&public_key_base64);
-    let public_key = RsaPublicKey::from_public_key_pem(&pem).unwrap();
+    Ok(general_purpose::STANDARD.encode(&encrypted))
+}
 
-    let encrypted = public_key
-        .encrypt(
-            &mut rand::thread_rng(),
-            Pkcs1v15Encrypt,
-            password.as_bytes(),
-        )
-        .unwrap();
+pub fn encrypt_password(password: &str) -> Result<String, Box<dyn Error>> {
+    let public_key_base64 = match fetch_public_key() {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("Warning: Failed to fetch public key: {error}. Using fallback public key");
+            DEFAULT_PUBLIC_KEY.to_string()
+        }
+    };
 
-    general_purpose::STANDARD.encode(&encrypted)
+    encrypt_password_with_public_key(password, &public_key_base64)
 }

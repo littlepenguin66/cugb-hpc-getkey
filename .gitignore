@@ -1,1 +1,7 @@
 /target
+
+.DS_Store
+.skills/cugb-hpc-getkey/node_modules/
+
+node_modules/
+bun.lock

@@ -1,6 +1,7 @@
 import type { LoginConfig, LoggerOptions } from "./types.ts";
 import { encryptPassword } from "./crypto.ts";
 import { parseCookies, getCookieString } from "./session.ts";
+import { join } from "path";
 
 const SERVICE = "https://hpc.cugb.edu.cn/ac/api/auth/loginSsoRedirect.action";
 
@@ -19,10 +20,6 @@ class Logger {
 
   verbose(message: string): void {
     if (this.options.verbose) console.log(message);
-  }
-
-  error(message: string): void {
-    console.error(message);
   }
 }
 
@@ -50,7 +47,7 @@ export async function login(config: LoginConfig, loggerOptions: LoggerOptions): 
   const logger = new Logger(loggerOptions);
   const cookies = new Map<string, string>();
 
-  const loginPageUrl = `https://hpc.cugb.edu.cn/sso/login?service=${encodeURIComponent(SERVICE)}&t=${Date.now()}`;
+  const loginPageUrl = `https://hpc.cugb.edu.cn/sso/login?service=${encodeURIComponent(config.service)}&t=${Date.now()}`;
 
   logger.verbose("Step 1: Fetching login page...");
   const loginPageRes = await fetch(loginPageUrl, { headers: HEADERS });
@@ -74,7 +71,7 @@ export async function login(config: LoginConfig, loggerOptions: LoggerOptions): 
     execution,
     _eventId: "submit",
     geolocation: "",
-    submit: "Login",
+    submit: "登录",
   });
 
   const loginRes = await fetch(loginPageUrl, {
@@ -138,6 +135,18 @@ export async function login(config: LoginConfig, loggerOptions: LoggerOptions): 
   return tokenData.data.tokenList[0].token;
 }
 
+function extractPrivateKey(data: { code: string; data?: string; msg?: string }): string {
+  if (data.code === "0" && data.data) {
+    return data.data;
+  }
+
+  if (data.msg) {
+    throw new Error(`Failed to get private key: ${data.msg}`);
+  }
+
+  throw new Error("Failed to get private key");
+}
+
 export async function downloadKey(jwtToken: string, loggerOptions: LoggerOptions): Promise<void> {
   const logger = new Logger(loggerOptions);
 
@@ -147,14 +156,15 @@ export async function downloadKey(jwtToken: string, loggerOptions: LoggerOptions
   });
 
   const data = (await res.json()) as { code: string; data?: string; msg?: string };
-
-  if (data.code === "0" && data.data) {
-    const keyPath = `${process.env.HOME}/.hpckey`;
-    await Bun.write(keyPath, data.data);
-    const { chmodSync } = await import("fs");
-    chmodSync(keyPath, 0o600);
-    logger.info(`Private key saved to: ${keyPath}`);
-  } else {
-    logger.error(`Failed to get private key: ${data.msg}`);
+  const privateKey = extractPrivateKey(data);
+  const home = process.env.HOME;
+  if (!home) {
+    throw new Error("Failed to determine home directory");
   }
+
+  const keyPath = join(home, ".hpckey");
+  await Bun.write(keyPath, privateKey);
+  const { chmodSync } = await import("fs");
+  chmodSync(keyPath, 0o600);
+  logger.info(`Private key saved to: ${keyPath}`);
 }
