@@ -25,7 +25,12 @@ it resolves them in this order:
 
 1. `--username` / `--password`
 2. `HPC_USERNAME` / `HPC_PASSWORD`
-3. interactive prompt if either value is missing
+3. interactive prompt for whichever value is still missing
+
+if `--password-stdin` is present:
+
+- the password is read from stdin instead of `--password` or `HPC_PASSWORD`
+- username must already be available through `--username` or `HPC_USERNAME`
 
 ## flags
 
@@ -53,6 +58,22 @@ warning:
 
 - convenient, but not recommended for long-term use
 - command line passwords can leak into shell history and process listings
+
+### `--password-stdin`
+
+reads the hpc password from stdin.
+
+example:
+
+```bash
+printf '%s\n' "$HPC_PASSWORD" | ghpc --username your_user --password-stdin
+```
+
+when to use it:
+
+- non-interactive scripts
+- shells where you do not want the password in process args
+- environments where hidden tty input is unavailable
 
 ### `-f, --force`
 
@@ -83,15 +104,47 @@ ghpc --status
 typical output:
 
 ```text
-Cache status: valid
+Cache: valid
+Cache path: /home/you/.hpc-login-cache.json
+Cache file: present
+Cache mode: 600
+Cache modified: 2026-04-11 11:11:11
+Cache size: 475 bytes
 Username: your_user
 Expires: 2026-04-11 12:34:56
+Remaining: 1h 23m 45s
+Key path: /home/you/.hpckey
+Key file: present
+Key mode: 600
+Key modified: 2026-04-11 11:11:11
+Key size: 2610 bytes
 ```
 
 or:
 
 ```text
-No cache
+Cache: invalid
+Cache path: /home/you/.hpc-login-cache.json
+Cache file: present
+Cache mode: 600
+Cache modified: 2026-04-11 11:11:11
+Cache size: 91 bytes
+Cache error: Failed to parse cache file
+Key path: /home/you/.hpckey
+Key file: present
+Key mode: 600
+Key modified: 2026-04-11 11:11:11
+Key size: 2610 bytes
+```
+
+or:
+
+```text
+Cache: missing
+Cache path: /home/you/.hpc-login-cache.json
+Cache file: missing
+Key path: /home/you/.hpckey
+Key file: missing
 ```
 
 ### `-q, --quiet`
@@ -111,18 +164,52 @@ ghpc --quiet
 
 ### `-v, --verbose`
 
-enables debug output and prints the token to stdout after success.
+enables debug output.
 
 current effect:
 
 - prints step-by-step debug messages to stderr
 - prints `✓ Using cached token` when success came from cache
-- prints the token to stdout on success
+- prints raw detail lines for normalized failures
 
 example:
 
 ```bash
 ghpc --verbose
+```
+
+### `--print-token`
+
+prints the resolved token on success.
+
+current effect:
+
+- token output is opt-in instead of being bundled into `--verbose`
+- works in normal text mode
+- in `--json` mode the token is included in the success object only when this flag is present
+
+example:
+
+```bash
+ghpc --force --print-token
+```
+
+### `--json`
+
+emits structured json output.
+
+current effect:
+
+- `ghpc --status --json` prints cache and key metadata as json
+- normal successful runs print a small json success object
+- `--print-token --json` adds the resolved token field to the success object
+- failures print a json error object and exit non-zero
+- human-oriented info and debug logs are suppressed while json mode is active
+
+example:
+
+```bash
+ghpc --status --json
 ```
 
 ## environment variables
@@ -165,24 +252,38 @@ with `--verbose`, expect:
 
 - debug step logs to stderr
 - cache-hit marker if applicable
-- token printed to stdout
+- raw detail lines for normalized failures
 
 ### quiet successful run
 
 with `--quiet`, expect:
 
 - fewer informational messages
-- no automatic token print unless you also changed the code path to do so
+- `--quiet` cannot be combined with `--verbose`
+- `--print-token` still prints the token because it is an explicit data output
 
 ### failure output
 
 on failure the program prints:
 
 ```text
-Operation failed: ...
+error: ...
+hint: use --verbose for step logs
 ```
 
 and exits non-zero.
+
+### json mode
+
+with `--json`, the cli switches to machine-readable output.
+
+that means:
+
+- `--status` writes a json object to stdout
+- successful non-status runs write a json object to stdout
+- failures write a json object to stderr
+- normalized errors keep a short `error` field and store raw backend detail separately
+- `--verbose` step logs are not mixed into json output
 
 ## common command patterns
 
@@ -200,6 +301,12 @@ export HPC_PASSWORD=your_password
 ghpc
 ```
 
+### stdin password flow
+
+```bash
+printf '%s\n' "$HPC_PASSWORD" | ghpc --username your_user --password-stdin
+```
+
 ### force refresh
 
 ```bash
@@ -210,6 +317,18 @@ ghpc --force
 
 ```bash
 ghpc --status
+```
+
+### inspect cache as json
+
+```bash
+ghpc --status --json
+```
+
+### print token explicitly
+
+```bash
+ghpc --force --print-token
 ```
 
 ### debug a failing run
@@ -254,11 +373,11 @@ purpose:
 - only a success-shaped api response writes `~/.hpckey`
 - failure-shaped responses now abort the command instead of pretending success
 
-### current metadata mismatch
+### cli metadata
 
-the clap help metadata in `src/cli.rs` is not fully aligned with the crate version and binary naming in `Cargo.toml`.
+the clap help metadata in `src/cli.rs` now follows the crate metadata from `Cargo.toml`.
 
 practically:
 
-- users still run the binary as `ghpc`
-- but generated help/version text may lag behind package metadata until that file is updated
+- users run the binary as `ghpc`
+- generated help/version text stays aligned with package metadata automatically

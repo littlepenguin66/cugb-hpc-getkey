@@ -1,3 +1,4 @@
+use crate::types::LoggerOptions;
 use base64::{Engine as _, engine::general_purpose};
 use regex_lite::Regex;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey, pkcs8::DecodePublicKey};
@@ -46,11 +47,13 @@ fn encrypt_password_with_public_key(
     Ok(general_purpose::STANDARD.encode(&encrypted))
 }
 
-pub fn encrypt_password(password: &str) -> Result<String, Box<dyn Error>> {
+pub fn encrypt_password(password: &str, logger_options: &LoggerOptions) -> Result<String, Box<dyn Error>> {
     let public_key_base64 = match fetch_public_key() {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("Warning: Failed to fetch public key: {error}. Using fallback public key");
+            if !logger_options.json {
+                eprintln!("Warning: Failed to fetch public key: {error}. Using fallback public key");
+            }
             DEFAULT_PUBLIC_KEY.to_string()
         }
     };

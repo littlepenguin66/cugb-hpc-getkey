@@ -19,6 +19,7 @@ pub struct TokenCache {
 pub struct LoggerOptions {
     pub quiet: bool,
     pub verbose: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -68,6 +68,12 @@ export HPC_PASSWORD=your_password
 ghpc
 ```
 
+with stdin password input:
+
+```bash
+printf '%s\n' "$HPC_PASSWORD" | ghpc --username your_username --password-stdin
+```
+
 force a fresh login:
 
 ```bash
@@ -80,10 +86,22 @@ check cache status:
 ghpc --status
 ```
 
+get machine-readable status:
+
+```bash
+ghpc --status --json
+```
+
 debug a failing run:
 
 ```bash
 ghpc --force --verbose
+```
+
+print the resolved token explicitly:
+
+```bash
+ghpc --force --print-token
 ```
 
 ## Options
@@ -92,10 +110,13 @@ ghpc --force --verbose
 |------|-------------|
 | `-u, --username` | HPC username, or use `HPC_USERNAME` |
 | `-p, --password` | HPC password, or use `HPC_PASSWORD` |
+| `--password-stdin` | Read the password from stdin |
 | `-f, --force` | Skip cache and perform a fresh login |
 | `-s, --status` | Print cache status only |
+| `--json` | Emit JSON output |
+| `--print-token` | Print the resolved token on success |
 | `-q, --quiet` | Suppress informational output |
-| `-v, --verbose` | Print debug logs and token output |
+| `-v, --verbose` | Print debug logs |
 
 ## What It Does
 
@@ -123,6 +144,7 @@ release notes:
 
 - [v2026.3.18](docs/release/v2026.3.18.md)
 - [v2026.4.11](docs/release/v2026.4.11.md)
+- [v26.4.12](docs/release/v26.4.12.md)
 
 ## Use with AI
 

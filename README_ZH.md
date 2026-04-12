@@ -68,6 +68,12 @@ export HPC_PASSWORD=your_password
 ghpc
 ```
 
+通过 stdin 传入密码：
+
+```bash
+printf '%s\n' "$HPC_PASSWORD" | ghpc --username your_username --password-stdin
+```
+
 强制重新登录：
 
 ```bash
@@ -80,10 +86,22 @@ ghpc --force
 ghpc --status
 ```
 
+获取机器可读的状态输出：
+
+```bash
+ghpc --status --json
+```
+
 调试失败流程：
 
 ```bash
 ghpc --force --verbose
+```
+
+显式输出当前 token：
+
+```bash
+ghpc --force --print-token
 ```
 
 ## 选项
@@ -92,10 +110,13 @@ ghpc --force --verbose
 |------|------|
 | `-u, --username` | HPC 用户名，或使用 `HPC_USERNAME` |
 | `-p, --password` | HPC 密码，或使用 `HPC_PASSWORD` |
+| `--password-stdin` | 从 stdin 读取密码 |
 | `-f, --force` | 跳过 cache，执行一次全新登录 |
 | `-s, --status` | 只输出 cache 状态 |
+| `--json` | 输出 JSON |
+| `--print-token` | 成功后输出 token |
 | `-q, --quiet` | 抑制信息输出 |
-| `-v, --verbose` | 输出调试日志和 token |
+| `-v, --verbose` | 输出调试日志 |
 
 ## 它实际做了什么
 
@@ -123,6 +144,7 @@ release notes：
 
 - [v2026.3.18](docs/release/v2026.3.18.md)
 - [v2026.4.11](docs/release/v2026.4.11.md)
+- [v26.4.12](docs/release/v26.4.12.md)
 
 ## 配合 AI 使用
 

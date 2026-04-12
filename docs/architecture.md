@@ -199,11 +199,10 @@ the ssh private key is the final persistent artifact.
 
 ## current known mismatches
 
-the architecture is more reliable than some of the top-level metadata currently suggests.
+the runtime behavior is closer to the code than the short top-level docs may suggest.
 
 examples:
 
-- `Cargo.toml` package version is newer than the clap-declared version string in `src/cli.rs`
 - README usage is intentionally simple, but the real behavior around `--quiet`, `--verbose`, and cache fallback is richer than the short summary there
 
 that is why the dedicated docs in this directory exist.

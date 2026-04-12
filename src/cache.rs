@@ -1,15 +1,18 @@
+use crate::paths::cache_file_path;
 use crate::types::TokenCache;
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
 
-fn get_cache_file_path() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
-    home.join(".hpc-login-cache.json")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheState {
+    Missing,
+    Invalid,
+    Expired,
+    Valid,
 }
 
 pub fn read_cache(username: &str) -> Option<String> {
-    let cache_file = get_cache_file_path();
+    let cache_file = cache_file_path();
 
     let text = fs::read_to_string(&cache_file).ok()?;
     let cache: TokenCache = serde_json::from_str(&text).ok()?;
@@ -27,7 +30,7 @@ pub fn read_cache(username: &str) -> Option<String> {
 }
 
 pub fn write_cache(username: &str, token: &str, ttl_ms: i64) -> std::io::Result<()> {
-    let cache_file = get_cache_file_path();
+    let cache_file = cache_file_path();
 
     let now = chrono::Local::now().timestamp_millis();
     let cache = TokenCache {
@@ -51,40 +54,44 @@ pub fn write_cache(username: &str, token: &str, ttl_ms: i64) -> std::io::Result<
 }
 
 pub fn get_cache_status() -> CacheStatus {
-    let cache_file = get_cache_file_path();
+    let cache_file = cache_file_path();
 
     match fs::read_to_string(&cache_file) {
         Ok(text) => {
             if let Ok(cache) = serde_json::from_str::<TokenCache>(&text) {
                 let now = chrono::Local::now().timestamp_millis();
-                let valid = now < cache.expires_at;
+                let state = if now < cache.expires_at {
+                    CacheState::Valid
+                } else {
+                    CacheState::Expired
+                };
                 CacheStatus {
-                    exists: true,
-                    valid,
+                    state,
                     username: Some(cache.username),
                     expires_at: Some(cache.expires_at),
+                    parse_error: None,
                 }
             } else {
                 CacheStatus {
-                    exists: false,
-                    valid: false,
+                    state: CacheState::Invalid,
                     username: None,
                     expires_at: None,
+                    parse_error: Some("Failed to parse cache file".to_string()),
                 }
             }
         }
         Err(_) => CacheStatus {
-            exists: false,
-            valid: false,
+            state: CacheState::Missing,
             username: None,
             expires_at: None,
+            parse_error: None,
         },
     }
 }
 
 pub struct CacheStatus {
-    pub exists: bool,
-    pub valid: bool,
+    pub state: CacheState,
     pub username: Option<String>,
     pub expires_at: Option<i64>,
+    pub parse_error: Option<String>,
 }

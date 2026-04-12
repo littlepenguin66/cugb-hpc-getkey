@@ -22,13 +22,13 @@ impl Logger {
     }
 
     pub fn info(&self, message: &str) {
-        if !self.options.quiet {
+        if !self.options.quiet && !self.options.json {
             println!("{}", message);
         }
     }
 
     pub fn debug(&self, message: &str) {
-        if self.options.verbose {
+        if self.options.verbose && !self.options.json {
             eprintln!("{}", message);
         }
     }
@@ -61,7 +61,7 @@ pub fn login(
     let execution = extract_execution_token(&login_page_html)?;
 
     logger.debug("Step 2: Encrypting password...");
-    let encrypted_password = encrypt_password(&config.password)?;
+    let encrypted_password = encrypt_password(&config.password, logger_options)?;
 
     logger.debug("Step 3: Sending login request...");
     let login_res = agent
@@ -255,7 +255,7 @@ pub fn download_key(jwt_token: &str, logger_options: &LoggerOptions) -> Result<(
         .call()?;
 
     let private_key = extract_private_key(res.into_json()?)?;
-    let path = dirs::home_dir()
+    let path = crate::paths::home_dir()
         .ok_or("Failed to determine home directory")?
         .join(".hpckey");
     std::fs::write(&path, private_key)?;

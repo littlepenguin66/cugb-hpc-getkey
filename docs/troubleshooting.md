@@ -19,6 +19,59 @@ that tells you which numbered step in `src/login.rs` failed.
 
 ## common problems
 
+### failed to read password
+
+symptom:
+
+- error mentions `Failed to read password`
+
+what it means:
+
+- the cli needed an interactive password prompt
+- but the current terminal session could not provide a usable tty for hidden input
+
+likely causes:
+
+- running inside a non-interactive shell wrapper
+- invoking the command from a tool that does not expose a real tty
+- terminal permissions blocked secure password input
+
+what to check:
+
+- whether `HPC_PASSWORD` is already set
+- whether you passed `--password`
+- whether `--password-stdin` would be a better fit
+- whether the command is running in a real terminal
+
+next actions:
+
+- run the command directly in a terminal
+- provide the password through `HPC_PASSWORD` for non-interactive use
+- provide the password through `--password-stdin` for script-friendly use
+- avoid wrappers that cannot open a tty for password input
+
+### password read from stdin was empty
+
+symptom:
+
+- error mentions `Password read from stdin was empty`
+
+what it means:
+
+- `--password-stdin` was used
+- but stdin did not contain any password bytes after trimming the trailing line ending
+
+what to check:
+
+- whether the pipeline actually writes a password
+- whether the upstream command produced an empty line
+
+next actions:
+
+- print the password value into the pipe explicitly
+- confirm the shell pipeline is not swallowing the input
+- retry with a known non-empty test value first
+
 ### failed to get execution token
 
 symptom:
@@ -169,6 +222,34 @@ what to do:
 ```bash
 ghpc --force
 ```
+
+### cache status is invalid
+
+symptom:
+
+- `ghpc --status` reports `invalid`
+
+what it means:
+
+- the cache file exists
+- but its json no longer matches the expected format
+
+likely causes:
+
+- manual edits to `~/.hpc-login-cache.json`
+- a partially written file after an interrupted run
+- old or unrelated data placed at the cache path
+
+what to check:
+
+- the contents of `~/.hpc-login-cache.json`
+- whether the file is valid json
+
+next actions:
+
+- remove the cache file
+- run `ghpc --force`
+- let the cli rewrite a fresh cache file
 
 ### cache exists but is ignored
 
