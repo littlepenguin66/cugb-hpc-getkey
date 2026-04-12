@@ -381,3 +381,5 @@ practically:
 
 - users run the binary as `ghpc`
 - generated help/version text stays aligned with package metadata automatically
+- `--help` groups flags into `input`, `output`, and `mode`
+- `--version` prints the current version together with a short description
