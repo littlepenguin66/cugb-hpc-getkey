@@ -19,7 +19,7 @@ panic = "abort"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
-ureq = { version = "2.12", features = ["json"] }
+ureq = { version = "3.3", features = ["json"] }
 rsa = "0.9"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }

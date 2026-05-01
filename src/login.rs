@@ -5,7 +5,9 @@ use crate::types::{DownloadKeyResponse, LoggerOptions, TokenResponse};
 use regex_lite::Regex;
 use std::collections::HashMap;
 use std::error::Error;
-use ureq::{Agent, AgentBuilder};
+use ureq::Agent;
+use ureq::http::Response;
+use ureq::Body;
 
 const SERVICE: &str = "https://hpc.cugb.edu.cn/ac/api/auth/loginSsoRedirect.action";
 const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -40,7 +42,7 @@ pub fn login(
 ) -> Result<String, Box<dyn Error>> {
     let logger = Logger::new(logger_options.clone());
     let mut cookies: HashMap<String, String> = HashMap::new();
-    let agent = AgentBuilder::new().redirects(0).build();
+    let agent: Agent = Agent::config_builder().max_redirects(0).build().into();
 
     logger.debug("Step 1: Fetching login page...");
     let login_page_url = format!(
@@ -51,13 +53,13 @@ pub fn login(
 
     let login_page_res = agent
         .get(&login_page_url)
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", ACCEPT)
-        .set("Accept-Language", ACCEPT_LANGUAGE)
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", ACCEPT)
+        .header("Accept-Language", ACCEPT_LANGUAGE)
         .call()?;
     update_cookies(&login_page_res, &mut cookies);
 
-    let login_page_html = login_page_res.into_string()?;
+    let login_page_html = login_page_res.into_body().read_to_string()?;
     let execution = extract_execution_token(&login_page_html)?;
 
     logger.debug("Step 2: Encrypting password...");
@@ -66,14 +68,14 @@ pub fn login(
     logger.debug("Step 3: Sending login request...");
     let login_res = agent
         .post(&login_page_url)
-        .set("Cookie", &get_cookie_string(&cookies))
-        .set("Origin", "https://hpc.cugb.edu.cn")
-        .set("Referer", &login_page_url)
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", ACCEPT)
-        .set("Accept-Language", ACCEPT_LANGUAGE)
-        .send_string(&build_login_body(
+        .header("Cookie", &get_cookie_string(&cookies))
+        .header("Origin", "https://hpc.cugb.edu.cn")
+        .header("Referer", &login_page_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", ACCEPT)
+        .header("Accept-Language", ACCEPT_LANGUAGE)
+        .send(&build_login_body(
             &config.username,
             &encrypted_password,
             execution,
@@ -82,10 +84,12 @@ pub fn login(
     let status = login_res.status();
     update_cookies(&login_res, &mut cookies);
 
-    match status {
-        302 => handle_ticket_redirect(&login_res, &agent, &mut cookies)?,
-        200 => handle_js_redirect(login_res, &agent, &mut cookies)?,
-        _ => return Err(format!("Login failed, status: {}", status).into()),
+    if status == 302 {
+        handle_ticket_redirect(&login_res, &agent, &mut cookies)?;
+    } else if status == 200 {
+        handle_js_redirect(login_res, &agent, &mut cookies)?;
+    } else {
+        return Err(format!("Login failed, status: {}", status).into());
     }
 
     logger.debug("Step 4: Getting JWT token...");
@@ -100,20 +104,20 @@ fn timestamp() -> u128 {
 }
 
 fn handle_ticket_redirect(
-    res: &ureq::Response,
+    res: &Response<Body>,
     agent: &Agent,
     cookies: &mut HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let location = match res.header("Location").and_then(|l| extract_ticket(l)) {
+    let location = match res.headers().get("Location").and_then(|v| v.to_str().ok()).and_then(|l| extract_ticket(l)) {
         Some(t) => t,
         None => return Ok(()),
     };
 
     let sso_res = agent
         .get(&format!("{}?ticket={}", SERVICE, location))
-        .set("Cookie", &get_cookie_string(cookies))
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", ACCEPT)
+        .header("Cookie", &get_cookie_string(cookies))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", ACCEPT)
         .call()?;
     update_cookies(&sso_res, cookies);
 
@@ -124,11 +128,11 @@ fn handle_ticket_redirect(
 }
 
 fn handle_js_redirect(
-    res: ureq::Response,
+    res: Response<Body>,
     agent: &Agent,
     cookies: &mut HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body = res.into_string()?;
+    let body = res.into_body().read_to_string()?;
     let redirect_url = match extract_redirect_url(&body) {
         Some(u) => u,
         None => return Ok(()),
@@ -136,9 +140,9 @@ fn handle_js_redirect(
 
     let redirect_res = agent
         .get(redirect_url)
-        .set("Cookie", &get_cookie_string(cookies))
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", ACCEPT)
+        .header("Cookie", &get_cookie_string(cookies))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", ACCEPT)
         .call()?;
     update_cookies(&redirect_res, cookies);
 
@@ -149,16 +153,16 @@ fn handle_js_redirect(
 }
 
 fn follow_redirect(
-    res: &ureq::Response,
+    res: &Response<Body>,
     agent: &Agent,
     cookies: &mut HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(location) = res.header("Location") {
+    if let Some(location) = res.headers().get("Location").and_then(|v| v.to_str().ok()) {
         let next_res = agent
             .get(&resolve_url(location))
-            .set("Cookie", &get_cookie_string(cookies))
-            .set("User-Agent", USER_AGENT)
-            .set("Accept", ACCEPT)
+            .header("Cookie", &get_cookie_string(cookies))
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", ACCEPT)
             .call()?;
         update_cookies(&next_res, cookies);
     }
@@ -206,9 +210,10 @@ fn extract_redirect_url(html: &str) -> Option<&str> {
         .and_then(|caps| caps.get(1).map(|m| m.as_str()))
 }
 
-fn update_cookies(res: &ureq::Response, cookies: &mut HashMap<String, String>) {
-    for cookie in res.all("set-cookie") {
-        let pair = cookie.split(';').next().unwrap_or("");
+fn update_cookies(res: &Response<Body>, cookies: &mut HashMap<String, String>) {
+    for cookie in res.headers().get_all("set-cookie") {
+        let cookie_str = cookie.to_str().unwrap_or("");
+        let pair = cookie_str.split(';').next().unwrap_or("");
         if let Some(pos) = pair.find('=') {
             cookies.insert(pair[..pos].to_string(), pair[pos + 1..].to_string());
         }
@@ -221,12 +226,12 @@ fn fetch_jwt_token(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let res = agent
         .get("https://hpc.cugb.edu.cn/ac/api/user/getCurrentUserInfo.action?includeToken=true&refresh=true")
-        .set("Cookie", &get_cookie_string(cookies))
-        .set("User-Agent", USER_AGENT)
-        .set("Accept", "application/json")
+        .header("Cookie", &get_cookie_string(cookies))
+        .header("User-Agent", USER_AGENT)
+        .header("Accept", "application/json")
         .call()?;
 
-    let data: TokenResponse = serde_json::from_str(&res.into_string()?)?;
+    let data: TokenResponse = res.into_body().read_json()?;
 
     if data.code != "0" || data.data.token_list.is_empty() {
         return Err("Failed to get token".into());
@@ -250,11 +255,11 @@ pub fn download_key(jwt_token: &str, logger_options: &LoggerOptions) -> Result<(
 
     logger.debug("Step 5: Downloading private key...");
     let res = ureq::get("https://gridview.cugb.edu.cn:6081/sothisai/api/eshell/action/downloadkey")
-        .set("token", jwt_token)
-        .set("Accept", "application/json")
+        .header("token", jwt_token)
+        .header("Accept", "application/json")
         .call()?;
 
-    let private_key = extract_private_key(res.into_json()?)?;
+    let private_key = extract_private_key(res.into_body().read_json()?)?;
     let path = crate::paths::home_dir()
         .ok_or("Failed to determine home directory")?
         .join(".hpckey");

@@ -22,7 +22,7 @@ fn base64_to_pem(base64_key: &str) -> String {
 
 fn fetch_public_key() -> Result<String, Box<dyn std::error::Error>> {
     let res = ureq::get(LOGIN_JS_URL).call()?;
-    let body = res.into_string()?;
+    let body = res.into_body().read_to_string()?;
 
     let re = Regex::new(r#"var key = '([^']+)'"#).unwrap();
     if let Some(caps) = re.captures(&body) {
@@ -39,7 +39,7 @@ fn encrypt_password_with_public_key(
     let pem = base64_to_pem(public_key_base64);
     let public_key = RsaPublicKey::from_public_key_pem(&pem)?;
     let encrypted = public_key.encrypt(
-        &mut rand::thread_rng(),
+        &mut rsa::rand_core::OsRng,
         Pkcs1v15Encrypt,
         password.as_bytes(),
     )?;
